@@ -1,5 +1,9 @@
 # PR Radar
 
+*In the age of AI-generated code, the bottleneck isn't opening pull requests.
+It's getting them reviewed. PR Radar puts every ready-for-review GitHub PR in
+front of your team, right in Microsoft Teams.*
+
 Posts your team's **ready-for-review** pull requests into Teams — **one message
 per PR**, so each becomes its own thread. Teammates react with 👀 on a PR's
 message to claim it, so no two people review the same PR.
