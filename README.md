@@ -46,8 +46,14 @@ list =
 
 [teams]
 # Teams → channel → “…” → Get link to channel
-channel_url = https://teams.microsoft.com/v2/?tenantId=...#/l/channel/19:...@thread.tacv2/...
+channel_url = https://teams.microsoft.com/v2/?tenantId=...#/l/channel/19:...@thread.tacv2/...&launchAgent=join_launcher_web
 ```
+
+> **Important:** keep the `&launchAgent=join_launcher_web` parameter at the end of
+> the channel URL. It forces Teams to open the channel **directly in the browser**;
+> without it the web app redirects to the "open in the desktop app / download"
+> interstitial, and the headless automation never reaches the channel. "Get link
+> to channel" usually includes it — if yours doesn't, append it manually.
 
 `config.example.ini` is fully commented. Run `python3 pr_radar.py --check` after
 editing to validate it.
