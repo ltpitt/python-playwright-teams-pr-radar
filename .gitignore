@@ -1,0 +1,11 @@
+# PR Radar — local, delicate config (never commit this).
+config.ini
+
+# Local scratch file (not part of the project).
+test.txt
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
