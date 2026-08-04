@@ -228,6 +228,105 @@ def test_build_messages_empty_is_lead_only():
     assert "All clear" in messages[0]
 
 
+def test_is_bot_login_flags_bots_and_passes_humans():
+    for bot in ("github-actions", "dependabot[bot]", "app/copilot-swe-agent",
+                "copilot-pull-request-reviewer", ""):
+        assert pr_radar.is_bot_login(bot) is True
+    for human in ("AB12CD_ing", "sergiou87", "williammartin"):
+        assert pr_radar.is_bot_login(human) is False
+
+
+def test_pr_reviewers_collects_reviews_and_comments_no_dupes():
+    pr = {
+        "author": {"login": "dev1"},
+        "reviews": [
+            {"author": {"login": "alice"}, "state": "COMMENTED"},
+            {"author": {"login": "alice"}, "state": "APPROVED"},
+        ],
+        "comments": [{"author": {"login": "bob"}}],
+    }
+    assert pr_radar.pr_reviewers(pr) == ["alice", "bob"]
+
+
+def test_pr_reviewers_skips_author_and_bots():
+    pr = {
+        "author": {"login": "dev1"},
+        "reviews": [
+            {"author": {"login": "copilot-pull-request-reviewer"}},
+            {"author": {"login": "dev1"}},
+        ],
+        "comments": [{"author": {"login": "github-actions"}}],
+    }
+    assert pr_radar.pr_reviewers(pr) == []
+
+
+def test_pr_reviewers_credits_humans_behind_copilot_author():
+    pr = {
+        "author": {"login": "app/copilot-swe-agent", "is_bot": True},
+        "assignees": [{"login": "AB12CD_ing", "id": "U_y"}],
+        "reviews": [{"author": {"login": "carol"}}],
+        "comments": [],
+    }
+    assert pr_radar.pr_reviewers(pr) == ["carol"]
+
+
+def test_format_pr_block_lists_reviewers_before_url():
+    pr = {
+        "number": 42, "title": "Fix the thing",
+        "author": {"login": "dev1"}, "url": "https://example/pull/42",
+    }
+    block = pr_radar.format_pr_block(
+        "org/repo", pr, 7, reviewers=["John Smith", "Priya Patel"]
+    )
+    lines = block.splitlines()
+    assert lines[2] == "👥 Already being reviewed by John Smith, Priya Patel"
+    assert lines[3] == "https://example/pull/42"
+
+
+def test_format_pr_block_without_reviewers_has_no_flag_line():
+    pr = {
+        "number": 42, "title": "t",
+        "author": {"login": "dev1"}, "url": "u",
+    }
+    assert "👥" not in pr_radar.format_pr_block("org/repo", pr, 1)
+
+
+def test_format_lead_surfaces_reviewing_count_and_legend():
+    now = datetime(2026, 7, 30, 12, 0, 0, tzinfo=timezone.utc)
+    rows = [_row("org/a", 1, 5), _row("org/a", 2, 3)]
+    lead = pr_radar.format_lead(rows, now, reviewing_count=1)
+    assert "1 already being reviewed" in lead
+    assert "👥 = someone's already reviewing" in lead
+
+
+def test_format_lead_no_reviewing_count_omits_legend():
+    now = datetime(2026, 7, 30, 12, 0, 0, tzinfo=timezone.utc)
+    lead = pr_radar.format_lead([_row("org/a", 1, 5)], now)
+    assert "already being reviewed" not in lead
+    assert "👥" not in lead
+
+
+def test_build_messages_flags_reviewed_pr_and_counts_it():
+    now = datetime(2026, 7, 30, 12, 0, 0, tzinfo=timezone.utc)
+    reviewed = {
+        "number": 1, "title": "busy", "url": "u1",
+        "author": {"login": "dev1"},
+        "reviews": [{"author": {"login": "AB12CD_ing"}}],
+        "comments": [{"author": {"login": "bob"}}],
+    }
+    quiet = {
+        "number": 2, "title": "quiet", "url": "u2",
+        "author": {"login": "dev2"}, "reviews": [], "comments": [],
+    }
+    rows = [("org/a", reviewed, 5), ("org/b", quiet, 1)]
+    messages = pr_radar.build_messages(
+        rows, now, names={"AB12CD_ing": "Jane Doe"}
+    )
+    assert "1 already being reviewed" in messages[0]
+    assert "👥 Already being reviewed by Jane Doe, bob" in messages[1]
+    assert "👥" not in messages[2]
+
+
 class _FakeResp:
     def __init__(self, code):
         self._code = code

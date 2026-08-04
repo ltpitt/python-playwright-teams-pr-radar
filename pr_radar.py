@@ -86,7 +86,7 @@ def run_gh(args, runner=subprocess.run):
     return json.loads(out) if out else []
 
 
-PR_FIELDS = "number,title,isDraft,author,assignees,createdAt,url"
+PR_FIELDS = "number,title,isDraft,author,assignees,createdAt,url,reviews,comments"
 
 
 def fetch_ready_prs(repo, runner=subprocess.run):
@@ -136,15 +136,23 @@ def age_marker(age):
     return "🟢"
 
 
-def format_lead(rows, now):
-    """Build the lead summary message (header + per-repo counts)."""
+def format_lead(rows, now, reviewing_count=0):
+    """Build the lead summary message (header + per-repo counts).
+
+    `reviewing_count` is how many of the ready PRs already have someone engaged
+    (reviewing/commenting); when non-zero it's surfaced in the header and a 👥
+    legend line is appended.
+    """
     if not rows:
         return f"✅ PR Radar · {now:%a %d %b} · All clear — no PRs waiting 🎉"
     counts = {}
     for repo, _pr, _age in rows:
         name = repo.split("/")[1]
         counts[name] = counts.get(name, 0) + 1
-    lines = [f"📋 PR Radar · {now:%a %d %b} · {len(rows)} ready for review"]
+    header = f"📋 PR Radar · {now:%a %d %b} · {len(rows)} ready for review"
+    if reviewing_count:
+        header += f" · {reviewing_count} already being reviewed"
+    lines = [header]
     for name, count in counts.items():
         lines.append(f"   • {name}: {count}")
     lines.append("")
@@ -152,22 +160,31 @@ def format_lead(rows, now):
         "👀 React with the eyes emoji on a PR to claim it, "
         "so we don't review the same one twice."
     )
+    if reviewing_count:
+        lines.append(
+            "👥 = someone's already reviewing — grab an unflagged one first."
+        )
     return "\n".join(lines)
 
 
-def format_pr_block(repo, pr, age, author=None, login=None):
+def format_pr_block(repo, pr, age, author=None, login=None, reviewers=None):
     """Build one per-PR Teams message block.
 
     `author` is the display string to show; when omitted, the raw `login` (or the
     PR author login) is shown as-is — no leading `@`, which would otherwise trip
-    Teams' mention autocomplete.
+    Teams' mention autocomplete. `reviewers` is the list of display strings for
+    people already engaged with the PR; when non-empty, an extra `👥 Already
+    being reviewed by ...` line is inserted before the URL.
     """
     who = author if author is not None else (login or pr["author"]["login"])
-    return "\n".join([
+    lines = [
         f"{age_marker(age)} {pr['title']}",
         f"{repo} #{pr['number']} · {age}d old · {who}",
-        pr["url"],
-    ])
+    ]
+    if reviewers:
+        lines.append(f"👥 Already being reviewed by {', '.join(reviewers)}")
+    lines.append(pr["url"])
+    return "\n".join(lines)
 
 
 def effective_author_login(pr):
@@ -189,16 +206,66 @@ def effective_author_login(pr):
     return login
 
 
+# Bots show up in a PR's reviews/comments (e.g. github-actions posts a routing
+# note, copilot-pull-request-reviewer leaves a COMMENTED review) but they aren't
+# an engineer "working on" the PR. Their author objects in the reviews/comments
+# payload only expose `login` (no `is_bot`), so we recognise them by login: the
+# GraphQL `[bot]` suffix / `app/` prefix, a small set of known service bots, and
+# anything Copilot-flavoured (copilot-swe-agent, copilot-pull-request-reviewer).
+KNOWN_BOT_LOGINS = {"github-actions", "dependabot", "codecov"}
+
+
+def is_bot_login(login):
+    """True if `login` looks like a bot rather than a human engineer."""
+    login = (login or "").lower()
+    if not login:
+        return True
+    if login.endswith("[bot]") or login.startswith("app/"):
+        return True
+    if login in KNOWN_BOT_LOGINS:
+        return True
+    return "copilot" in login
+
+
+def pr_reviewers(pr):
+    """Distinct human logins already engaged with `pr`, first-seen order.
+
+    Someone counts as engaged when they've left a review (formal or an inline
+    `COMMENTED` review) or a conversation comment. We skip the PR's own author
+    and any bot, so what's left is the people a second reviewer would be
+    duplicating.
+    """
+    author = effective_author_login(pr)
+    seen = []
+    for source in ("reviews", "comments"):
+        for entry in pr.get(source) or []:
+            login = (entry.get("author") or {}).get("login", "")
+            if not login or login == author or is_bot_login(login):
+                continue
+            if login not in seen:
+                seen.append(login)
+    return seen
+
+
 def build_messages(rows, now, names=None):
     """Return the ordered list of Teams messages (lead first, then per-PR).
 
     `names` optionally maps a GitHub login to a friendly display name.
     """
-    messages = [format_lead(rows, now)]
-    for repo, pr, age in rows:
+    reviewers_by_row = [pr_reviewers(pr) for _repo, pr, _age in rows]
+    reviewing_count = sum(1 for revs in reviewers_by_row if revs)
+    messages = [format_lead(rows, now, reviewing_count=reviewing_count)]
+    for (repo, pr, age), reviewer_logins in zip(rows, reviewers_by_row):
         login = effective_author_login(pr)
         author = names.get(login) if names else None
-        messages.append(format_pr_block(repo, pr, age, author=author, login=login))
+        reviewers = [
+            (names.get(rl) if names else None) or rl for rl in reviewer_logins
+        ]
+        messages.append(
+            format_pr_block(
+                repo, pr, age, author=author, login=login, reviewers=reviewers
+            )
+        )
     return messages
 
 
@@ -945,8 +1012,11 @@ def main(argv=None):
     now = datetime.now(timezone.utc).astimezone()
     rows = collect(config.repos, now)
     logins = [effective_author_login(pr) for _repo, pr, _age in rows]
-    names = resolve_authors(logins)
-    raw = unresolved_logins(logins, names)
+    reviewer_logins = [
+        rl for _repo, pr, _age in rows for rl in pr_reviewers(pr)
+    ]
+    names = resolve_authors(logins + reviewer_logins)
+    raw = unresolved_logins(logins + reviewer_logins, names)
     if raw:
         print(
             f"Note: no display name for {len(raw)} author(s); "

@@ -135,6 +135,20 @@ ago):
 
 When nothing is waiting for review, it posts a single all-clear line instead.
 
+## Already being reviewed
+
+To stop two engineers picking up the same PR, PR Radar flags any PR someone is
+already engaged with. A PR is flagged when a **non-author, non-bot** account has
+left a **review** (formal or an inline `COMMENTED` review) or a **conversation
+comment** — the two are separate on GitHub, so both buckets are checked.
+
+- Flagged PRs stay in the list (a stalled "in review" PR may still need a nudge)
+  and gain a `👥 Already being reviewed by …` line naming everyone engaged
+  (resolved to real names, same as authors).
+- The lead summary appends `· N already being reviewed` and a `👥` legend line.
+- Bots are ignored so CI/Copilot chatter (`github-actions`,
+  `copilot-pull-request-reviewer`, etc.) never counts as a reviewer.
+
 ## Author names
 
 Each PR shows the author's real name (e.g. `Jane Doe`) instead of the raw
